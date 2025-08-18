@@ -444,7 +444,7 @@ if [ "$SOCKS5_OUTBOUND_ENABLED" = "true" ]; then
     SOCKS5_USER_JSON=""
     if [ -n "$SOCKS5_OUTBOUND_USER" ]; then
         SOCKS5_USER_JSON=$(cat <<EOF
-                        "users": [
+                        ,"users": [
                             {
                                 "user": "$SOCKS5_OUTBOUND_USER",
                                 "pass": "$SOCKS5_OUTBOUND_PASS"
@@ -462,7 +462,7 @@ EOF
                     "servers": [
                         {
                             "address": "$SOCKS5_OUTBOUND_ADDRESS",
-                            "port": $SOCKS5_OUTBOUND_PORT,
+                            "port": $SOCKS5_OUTBOUND_PORT
                             $SOCKS5_USER_JSON
                         }
                     ]
@@ -474,7 +474,8 @@ else
     DEFAULT_OUTBOUND_JSON='{"protocol":"freedom","tag": "direct" }'
 fi
 # 将生成的JSON压缩成单行，以便注入
-DEFAULT_OUTBOUND_JSON_ONELINE=$(echo "$DEFAULT_OUTBOUND_JSON" | tr -d '\n' | sed 's/ //g')
+DEFAULT_OUTBOUND_JSON_ONELINE=$(echo "$DEFAULT_OUTBOUND_JSON" | tr -d '\n' | sed 's/"/\\"/g')
+
 
 # 修改Python文件
 echo -e "${BLUE}正在应用分流和流量转发配置...${NC}"
@@ -619,8 +620,8 @@ new_config_template = '''config = {
         }
     }'''
 
-# 使用字符串替换来安全地插入JSON
-new_config = new_config_template.replace('"__DEFAULT_OUTBOUND_PLACEHOLDER__"', DEFAULT_OUTBOUND_JSON)
+# FIX: 使用字符串替换来安全地插入JSON，查找没有引号的占位符
+new_config = new_config_template.replace('__DEFAULT_OUTBOUND_PLACEHOLDER__', DEFAULT_OUTBOUND_JSON)
 
 # 替换配置
 content = content.replace(old_config, new_config)
@@ -716,6 +717,10 @@ print("配置已成功注入")
 EOF
 
 python3 config_patch.py
+if [ $? -ne 0 ]; then
+    echo -e "${RED}配置注入脚本执行失败！请检查Python环境。${NC}"
+    exit 1
+fi
 rm config_patch.py
 
 echo -e "${GREEN}配置已集成${NC}"
@@ -782,7 +787,7 @@ sleep 8
 # 检查服务是否正常运行
 if ! ps -p "$APP_PID" > /dev/null 2>&1; then
     echo -e "${RED}服务启动失败，请检查日志${NC}"
-    echo -e "${YELLOW}查看日志: tail -f app.log${NC}"
+    echo -e "${YELLOW}查看日志: tail -f $(pwd)/app.log${NC}"
     echo -e "${YELLOW}检查端口占用: netstat -tlnp | grep :3000${NC}"
     exit 1
 fi
