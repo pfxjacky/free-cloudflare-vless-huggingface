@@ -3,5 +3,6 @@
 
 
 一键启动脚本
-
+```bash
 bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/cf-huggingface.sh)
+```
