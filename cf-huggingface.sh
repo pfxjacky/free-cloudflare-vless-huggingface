@@ -226,7 +226,7 @@ configure_hf_keep_alive() {
 # 定义 SOCKS5 出站配置函数
 configure_socks5_outbound() {
     echo
-    echo -e "${YELLOW}是否将所有非YouTube流量转发到外部SOCKS5代理? (y/n)${NC}"
+    echo -e "${YELLOW}是否将所有流量转发到外部SOCKS5代理? (y/n)${NC}"
     read -p "> " ENABLE_SOCKS5_OUTBOUND
     if [ "$ENABLE_SOCKS5_OUTBOUND" = "y" ] || [ "$ENABLE_SOCKS5_OUTBOUND" = "Y" ]; then
         echo -e "${YELLOW}请输入外部SOCKS5代理的地址 (IP或域名):${NC}"
@@ -257,7 +257,7 @@ configure_socks5_outbound() {
         SOCKS5_OUTBOUND_USER="$SOCKS5_OUTBOUND_USER_INPUT"
         SOCKS5_OUTBOUND_PASS="$SOCKS5_OUTBOUND_PASS_INPUT"
         
-        echo -e "${GREEN}流量转发已设置！${NC}"
+        echo -e "${GREEN}流量转发已设置！所有流量将通过SOCKS5代理。${NC}"
         echo -e "${GREEN}目标SOCKS5: $SOCKS5_OUTBOUND_ADDRESS:$SOCKS5_OUTBOUND_PORT${NC}"
     fi
 }
@@ -282,7 +282,9 @@ if [ "$MODE_CHOICE" = "1" ]; then
     configure_hf_keep_alive
     configure_socks5_outbound
     
-    echo -e "${GREEN}YouTube分流已自动配置${NC}"
+    if [ "$SOCKS5_OUTBOUND_ENABLED" = "false" ]; then
+      echo -e "${GREEN}YouTube分流已自动配置${NC}"
+    fi
     echo
     echo -e "${GREEN}极速配置完成！正在启动服务...${NC}"
     echo
@@ -413,7 +415,9 @@ else
         fi
     fi
     
-    echo -e "${GREEN}YouTube分流已自动配置${NC}"
+    if [ "$SOCKS5_OUTBOUND_ENABLED" = "false" ]; then
+      echo -e "${GREEN}YouTube分流已自动配置${NC}"
+    fi
 
     echo
     echo -e "${GREEN}完整配置完成！${NC}"
@@ -439,43 +443,44 @@ echo -e "${BLUE}正在启动服务...${NC}"
 echo -e "${YELLOW}当前工作目录：$(pwd)${NC}"
 echo
 
-# 根据SOCKS5出站配置生成JSON块
+# 根据SOCKS5出站配置，动态生成Xray配置片段
 if [ "$SOCKS5_OUTBOUND_ENABLED" = "true" ]; then
+    # --- SOCKS5模式 ---
+    # 默认出口设置为SOCKS5
     SOCKS5_USER_JSON=""
     if [ -n "$SOCKS5_OUTBOUND_USER" ]; then
         SOCKS5_USER_JSON=$(cat <<EOF
-                        ,"users": [
-                            {
-                                "user": "$SOCKS5_OUTBOUND_USER",
-                                "pass": "$SOCKS5_OUTBOUND_PASS"
-                            }
-                        ]
+                        ,"users": [{"user": "$SOCKS5_OUTBOUND_USER", "pass": "$SOCKS5_OUTBOUND_PASS"}]
 EOF
 )
     fi
-    
     DEFAULT_OUTBOUND_JSON=$(cat <<EOF
-            {
-                "protocol": "socks",
-                "tag": "direct",
-                "settings": {
-                    "servers": [
-                        {
-                            "address": "$SOCKS5_OUTBOUND_ADDRESS",
-                            "port": $SOCKS5_OUTBOUND_PORT
-                            $SOCKS5_USER_JSON
-                        }
-                    ]
-                }
-            }
+{"protocol":"socks","tag":"direct","settings":{"servers":[{"address":"$SOCKS5_OUTBOUND_ADDRESS","port":$SOCKS5_OUTBOUND_PORT $SOCKS5_USER_JSON}]}}
 EOF
 )
+    # YouTube出口和规则设置为空，因为所有流量都走SOCKS5
+    YOUTUBE_OUTBOUND_JSON=""
+    YOUTUBE_ROUTING_RULE_JSON=""
 else
-    DEFAULT_OUTBOUND_JSON='{"protocol":"freedom","tag": "direct" }'
+    # --- 默认分流模式 ---
+    # 默认出口为直连
+    DEFAULT_OUTBOUND_JSON='{"protocol":"freedom","tag":"direct"}'
+    # 设置YouTube分流出口
+    YOUTUBE_OUTBOUND_JSON=$(cat <<EOF
+,{"protocol":"vmess","tag":"youtube","settings":{"vnext":[{"address":"172.233.171.224","port":16416,"users":[{"id":"8c1b9bea-cb51-43bb-a65c-0af31bbbf145","alterId":0}]}]},"streamSettings":{"network":"tcp"}}
+EOF
+)
+    # 设置YouTube路由规则
+    YOUTUBE_ROUTING_RULE_JSON=$(cat <<EOF
+{"type":"field","domain":["youtube.com","youtu.be","googlevideo.com","ytimg.com","gstatic.com","googleapis.com","ggpht.com","googleusercontent.com"],"outboundTag":"youtube"}
+EOF
+)
 fi
+
 # 将生成的JSON压缩成单行，以便注入
 DEFAULT_OUTBOUND_JSON_ONELINE=$(echo "$DEFAULT_OUTBOUND_JSON" | tr -d '\n' | sed 's/"/\\"/g')
-
+YOUTUBE_OUTBOUND_JSON_ONELINE=$(echo "$YOUTUBE_OUTBOUND_JSON" | tr -d '\n' | sed 's/"/\\"/g')
+YOUTUBE_ROUTING_RULE_JSON_ONELINE=$(echo "$YOUTUBE_ROUTING_RULE_JSON" | tr -d '\n' | sed 's/"/\\"/g')
 
 # 修改Python文件
 echo -e "${BLUE}正在应用分流和流量转发配置...${NC}"
@@ -483,8 +488,10 @@ cat > config_patch.py << EOF
 # coding: utf-8
 import os
 
-# 这是由bash脚本生成的默认出站配置
+# 这是由bash脚本生成的配置片段
 DEFAULT_OUTBOUND_JSON = """$DEFAULT_OUTBOUND_JSON_ONELINE"""
+YOUTUBE_OUTBOUND_JSON = """$YOUTUBE_OUTBOUND_JSON_ONELINE"""
+YOUTUBE_ROUTING_RULE_JSON = """$YOUTUBE_ROUTING_RULE_JSON_ONELINE"""
 
 # 读取app.py文件
 with open('app.py', 'r', encoding='utf-8') as f:
@@ -493,7 +500,7 @@ with open('app.py', 'r', encoding='utf-8') as f:
 # 找到原始配置
 old_config = 'config ={"log":{"access":"/dev/null","error":"/dev/null","loglevel":"none",},"inbounds":[{"port":ARGO_PORT ,"protocol":"vless","settings":{"clients":[{"id":UUID ,"flow":"xtls-rprx-vision",},],"decryption":"none","fallbacks":[{"dest":3001 },{"path":"/vless-argo","dest":3002 },{"path":"/vmess-argo","dest":3003 },{"path":"/trojan-argo","dest":3004 },],},"streamSettings":{"network":"tcp",},},{"port":3001 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID },],"decryption":"none"},"streamSettings":{"network":"ws","security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3003 ,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[{"id":UUID ,"alterId":0 }]},"streamSettings":{"network":"ws","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3004 ,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[{"password":UUID },]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},],"outbounds":[{"protocol":"freedom","tag": "direct" },{"protocol":"blackhole","tag":"block"}]}'
 
-# 这是一个模板，使用占位符，避免f-string嵌套问题
+# 这是一个模板，使用占位符
 new_config_template = '''config = {
         "log": {
             "access": "/dev/null",
@@ -582,46 +589,26 @@ new_config_template = '''config = {
             }
         ],
         "outbounds": [
-            __DEFAULT_OUTBOUND_PLACEHOLDER__,
-            {
-                "protocol": "vmess",
-                "tag": "youtube",
-                "settings": {
-                    "vnext": [{
-                        "address": "172.233.171.224",
-                        "port": 16416,
-                        "users": [{
-                            "id": "8c1b9bea-cb51-43bb-a65c-0af31bbbf145",
-                            "alterId": 0
-                        }]
-                    }]
-                },
-                "streamSettings": {"network": "tcp"}
-            },
+            __DEFAULT_OUTBOUND_PLACEHOLDER__
+            __YOUTUBE_OUTBOUND_PLACEHOLDER__,
             {"protocol": "blackhole", "tag": "block"}
         ],
         "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": [
-                {
-                    "type": "field",
-                    "domain": [
-                        "youtube.com", "youtu.be",
-                        "googlevideo.com",
-                        "ytimg.com",
-                        "gstatic.com",
-                        "googleapis.com",
-                        "ggpht.com",
-                        "googleusercontent.com"
-                    ],
-                    "outboundTag": "youtube"
-                }
+                __YOUTUBE_ROUTING_RULE_PLACEHOLDER__
             ]
         }
     }'''
 
-# FIX: 使用字符串替换来安全地插入JSON，查找没有引号的占位符
+# 使用字符串替换来安全地插入JSON
 new_config = new_config_template.replace('__DEFAULT_OUTBOUND_PLACEHOLDER__', DEFAULT_OUTBOUND_JSON)
+new_config = new_config.replace('__YOUTUBE_OUTBOUND_PLACEHOLDER__', YOUTUBE_OUTBOUND_JSON)
+# 如果YouTube规则为空，则路由规则列表也为空；否则，规则就是YouTube规则。这可以避免rules数组中出现空的元素。
+if not YOUTUBE_ROUTING_RULE_JSON:
+    new_config = new_config.replace('__YOUTUBE_ROUTING_RULE_PLACEHOLDER__', '')
+else:
+    new_config = new_config.replace('__YOUTUBE_ROUTING_RULE_PLACEHOLDER__', YOUTUBE_ROUTING_RULE_JSON)
 
 # 替换配置
 content = content.replace(old_config, new_config)
@@ -872,6 +859,8 @@ echo -e "UUID: ${BLUE}$CURRENT_UUID${NC}"
 echo -e "订阅路径: ${BLUE}/$SUB_PATH_VALUE${NC}"
 if [ "$SOCKS5_OUTBOUND_ENABLED" = "true" ]; then
     echo -e "流量转发: ${GREEN}已启用 -> $SOCKS5_OUTBOUND_ADDRESS:$SOCKS5_OUTBOUND_PORT${NC}"
+else
+    echo -e "流量转发: ${RED}未启用 (使用YouTube分流模式)${NC}"
 fi
 echo
 
@@ -908,10 +897,16 @@ UUID: $CURRENT_UUID
 if [ "$SOCKS5_OUTBOUND_ENABLED" = "true" ]; then
     SAVE_INFO="${SAVE_INFO}
 === 流量转发设置 ===
-状态: 已启用
+状态: 已启用 (所有流量转发)
 SOCKS5目标: $SOCKS5_OUTBOUND_ADDRESS:$SOCKS5_OUTBOUND_PORT
 "
+else
+    SAVE_INFO="${SAVE_INFO}
+=== 流量转发设置 ===
+状态: 未启用 (使用内置YouTube分流)
+"
 fi
+
 
 if [ "$PUBLIC_IP" != "获取失败" ]; then
     SAVE_INFO="${SAVE_INFO}
@@ -939,13 +934,6 @@ if [ "$KEEP_ALIVE_HF" = "true" ]; then
 停止保活服务: pkill -f keep_alive_task.sh && rm keep_alive_task.sh keep_alive_status.log"
 fi
 
-SAVE_INFO="${SAVE_INFO}
-
-=== 分流说明 ===
-- 已集成YouTube分流优化到xray配置
-- YouTube相关域名自动走专用线路
-- 无需额外配置，透明分流"
-
 echo "$SAVE_INFO" > "$NODE_INFO_FILE"
 echo -e "${GREEN}节点信息已保存到 $NODE_INFO_FILE${NC}"
 echo -e "${YELLOW}使用脚本选择选项3或运行带-v参数可随时查看节点信息${NC}"
@@ -953,9 +941,10 @@ echo -e "${YELLOW}使用脚本选择选项3或运行带-v参数可随时查看�
 echo -e "${YELLOW}=== 重要提示 ===${NC}"
 echo -e "${GREEN}部署已完成，节点信息已成功生成${NC}"
 echo -e "${GREEN}可以立即使用订阅地址添加到客户端${NC}"
-echo -e "${GREEN}YouTube分流已集成到xray配置，无需额外设置${NC}"
 if [ "$SOCKS5_OUTBOUND_ENABLED" = "true" ]; then
-    echo -e "${GREEN}所有非YouTube流量将通过 $SOCKS5_OUTBOUND_ADDRESS:$SOCKS5_OUTBOUND_PORT 转发${NC}"
+    echo -e "${GREEN}所有流量将通过 $SOCKS5_OUTBOUND_ADDRESS:$SOCKS5_OUTBOUND_PORT 转发${NC}"
+else
+    echo -e "${GREEN}YouTube分流已集成到xray配置，无需额外设置${NC}"
 fi
 echo -e "${GREEN}服务将持续在后台运行${NC}"
 echo
