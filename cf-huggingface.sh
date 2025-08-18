@@ -473,12 +473,17 @@ EOF
 else
     DEFAULT_OUTBOUND_JSON='{"protocol":"freedom","tag": "direct" }'
 fi
+# 将生成的JSON压缩成单行，以便注入
+DEFAULT_OUTBOUND_JSON_ONELINE=$(echo "$DEFAULT_OUTBOUND_JSON" | tr -d '\n' | sed 's/ //g')
 
 # 修改Python文件
 echo -e "${BLUE}正在应用分流和流量转发配置...${NC}"
 cat > config_patch.py << EOF
 # coding: utf-8
 import os
+
+# 这是由bash脚本生成的默认出站配置
+DEFAULT_OUTBOUND_JSON = """$DEFAULT_OUTBOUND_JSON_ONELINE"""
 
 # 读取app.py文件
 with open('app.py', 'r', encoding='utf-8') as f:
@@ -487,116 +492,117 @@ with open('app.py', 'r', encoding='utf-8') as f:
 # 找到原始配置
 old_config = 'config ={"log":{"access":"/dev/null","error":"/dev/null","loglevel":"none",},"inbounds":[{"port":ARGO_PORT ,"protocol":"vless","settings":{"clients":[{"id":UUID ,"flow":"xtls-rprx-vision",},],"decryption":"none","fallbacks":[{"dest":3001 },{"path":"/vless-argo","dest":3002 },{"path":"/vmess-argo","dest":3003 },{"path":"/trojan-argo","dest":3004 },],},"streamSettings":{"network":"tcp",},},{"port":3001 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID },],"decryption":"none"},"streamSettings":{"network":"ws","security":"none"}},{"port":3002 ,"listen":"127.0.0.1","protocol":"vless","settings":{"clients":[{"id":UUID ,"level":0 }],"decryption":"none"},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/vless-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3003 ,"listen":"127.0.0.1","protocol":"vmess","settings":{"clients":[{"id":UUID ,"alterId":0 }]},"streamSettings":{"network":"ws","wsSettings":{"path":"/vmess-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},{"port":3004 ,"listen":"127.0.0.1","protocol":"trojan","settings":{"clients":[{"password":UUID },]},"streamSettings":{"network":"ws","security":"none","wsSettings":{"path":"/trojan-argo"}},"sniffing":{"enabled":True ,"destOverride":["http","tls","quic"],"metadataOnly":False }},],"outbounds":[{"protocol":"freedom","tag": "direct" },{"protocol":"blackhole","tag":"block"}]}'
 
-new_config = f'''config = {{
-        "log": {{
+# 这是一个模板，使用占位符，避免f-string嵌套问题
+new_config_template = '''config = {
+        "log": {
             "access": "/dev/null",
             "error": "/dev/null",
             "loglevel": "none"
-        }},
+        },
         "inbounds": [
-            {{
+            {
                 "port": ARGO_PORT,
                 "protocol": "vless",
-                "settings": {{
-                    "clients": [{{"id": UUID, "flow": "xtls-rprx-vision"}}],
+                "settings": {
+                    "clients": [{"id": UUID, "flow": "xtls-rprx-vision"}],
                     "decryption": "none",
                     "fallbacks": [
-                        {{"dest": 3001}},
-                        {{"path": "/vless-argo", "dest": 3002}},
-                        {{"path": "/vmess-argo", "dest": 3003}},
-                        {{"path": "/trojan-argo", "dest": 3004}}
+                        {"dest": 3001},
+                        {"path": "/vless-argo", "dest": 3002},
+                        {"path": "/vmess-argo", "dest": 3003},
+                        {"path": "/trojan-argo", "dest": 3004}
                     ]
-                }},
-                "streamSettings": {{"network": "tcp"}}
-            }},
-            {{
+                },
+                "streamSettings": {"network": "tcp"}
+            },
+            {
                 "port": 3001,
                 "listen": "127.0.0.1",
                 "protocol": "vless",
-                "settings": {{
-                    "clients": [{{"id": UUID}}],
+                "settings": {
+                    "clients": [{"id": UUID}],
                     "decryption": "none"
-                }},
-                "streamSettings": {{"network": "ws", "security": "none"}}
-            }},
-            {{
+                },
+                "streamSettings": {"network": "ws", "security": "none"}
+            },
+            {
                 "port": 3002,
                 "listen": "127.0.0.1",
                 "protocol": "vless",
-                "settings": {{
-                    "clients": [{{"id": UUID, "level": 0}}],
+                "settings": {
+                    "clients": [{"id": UUID, "level": 0}],
                     "decryption": "none"
-                }},
-                "streamSettings": {{
+                },
+                "streamSettings": {
                     "network": "ws",
                     "security": "none",
-                    "wsSettings": {{"path": "/vless-argo"}}
-                }},
-                "sniffing": {{
+                    "wsSettings": {"path": "/vless-argo"}
+                },
+                "sniffing": {
                     "enabled": True,
                     "destOverride": ["http", "tls", "quic"],
                     "metadataOnly": False
-                }}
-            }},
-            {{
+                }
+            },
+            {
                 "port": 3003,
                 "listen": "127.0.0.1",
                 "protocol": "vmess",
-                "settings": {{
-                    "clients": [{{"id": UUID, "alterId": 0}}]
-                }},
-                "streamSettings": {{
+                "settings": {
+                    "clients": [{"id": UUID, "alterId": 0}]
+                },
+                "streamSettings": {
                     "network": "ws",
-                    "wsSettings": {{"path": "/vmess-argo"}}
-                }},
-                "sniffing": {{
+                    "wsSettings": {"path": "/vmess-argo"}
+                },
+                "sniffing": {
                     "enabled": True,
                     "destOverride": ["http", "tls", "quic"],
                     "metadataOnly": False
-                }}
-            }},
-            {{
+                }
+            },
+            {
                 "port": 3004,
                 "listen": "127.0.0.1",
                 "protocol": "trojan",
-                "settings": {{
-                    "clients": [{{"password": UUID}}]
-                }},
-                "streamSettings": {{
+                "settings": {
+                    "clients": [{"password": UUID}]
+                },
+                "streamSettings": {
                     "network": "ws",
                     "security": "none",
-                    "wsSettings": {{"path": "/trojan-argo"}}
-                }},
-                "sniffing": {{
+                    "wsSettings": {"path": "/trojan-argo"}
+                },
+                "sniffing": {
                     "enabled": True,
                     "destOverride": ["http", "tls", "quic"],
                     "metadataOnly": False
-                }}
-            }}
+                }
+            }
         ],
         "outbounds": [
-            {DEFAULT_OUTBOUND_JSON},
-            {{
+            __DEFAULT_OUTBOUND_PLACEHOLDER__,
+            {
                 "protocol": "vmess",
                 "tag": "youtube",
-                "settings": {{
-                    "vnext": [{{
+                "settings": {
+                    "vnext": [{
                         "address": "172.233.171.224",
                         "port": 16416,
-                        "users": [{{
+                        "users": [{
                             "id": "8c1b9bea-cb51-43bb-a65c-0af31bbbf145",
                             "alterId": 0
-                        }}]
-                    }}]
-                }},
-                "streamSettings": {{"network": "tcp"}}
-            }},
-            {{"protocol": "blackhole", "tag": "block"}}
+                        }]
+                    }]
+                },
+                "streamSettings": {"network": "tcp"}
+            },
+            {"protocol": "blackhole", "tag": "block"}
         ],
-        "routing": {{
+        "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": [
-                {{
+                {
                     "type": "field",
                     "domain": [
                         "youtube.com", "youtu.be",
@@ -608,10 +614,13 @@ new_config = f'''config = {{
                         "googleusercontent.com"
                     ],
                     "outboundTag": "youtube"
-                }}
+                }
             ]
-        }}
-    }}'''
+        }
+    }'''
+
+# 使用字符串替换来安全地插入JSON
+new_config = new_config_template.replace('"__DEFAULT_OUTBOUND_PLACEHOLDER__"', DEFAULT_OUTBOUND_JSON)
 
 # 替换配置
 content = content.replace(old_config, new_config)
@@ -705,12 +714,6 @@ with open('app.py', 'w', encoding='utf-8') as f:
 
 print("配置已成功注入")
 EOF
-
-# 将SOCKS5出站配置块注入到python脚本中
-# 使用更安全的分隔符来避免JSON内容冲突
-# 先将DEFAULT_OUTBOUND_JSON中的换行符移除
-DEFAULT_OUTBOUND_JSON_ONELINE=$(echo "$DEFAULT_OUTBOUND_JSON" | tr -d '\n')
-sed -i "s|{DEFAULT_OUTBOUND_JSON}|${DEFAULT_OUTBOUND_JSON_ONELINE}|" config_patch.py
 
 python3 config_patch.py
 rm config_patch.py
