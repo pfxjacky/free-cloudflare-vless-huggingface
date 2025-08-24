@@ -253,6 +253,16 @@ generate_singbox_config() {
 }
 EOF
 }
+# 验证配置文件 (这是缺失的函数)
+validate_config() {
+    log "验证 sing-box 配置文件..."
+    if ! /usr/local/bin/sing-box check -c /etc/sing-box/config.json; then
+        error "配置文件语法错误，安装中止"
+        cat /etc/sing-box/config.json
+        exit 1
+    fi
+    log "配置文件语法检查通过"
+}
 
 # 创建systemd服务
 create_systemd_service() {
