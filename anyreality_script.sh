@@ -263,6 +263,37 @@ validate_config() {
     fi
     log "配置文件语法检查通过"
 }
+# --- compatibility shim: define validate_config() if missing ---
+if ! declare -F validate_config >/dev/null 2>&1; then
+validate_config() {
+  # 这里复用脚本里已有的 log/error 函数；若它们稍后才定义也没问题，
+  # 只要在真正执行 validate_config() 前定义好即可。
+  log "验证 sing-box 配置文件..."
+
+  local cfg="/etc/sing-box/config.json"
+
+  # 寻找 sing-box 可执行文件：优先环境变量，再查 PATH，最后常见安装路径
+  local bin="${SING_BOX_BIN:-$(command -v sing-box 2>/dev/null || true)}"
+  if [[ -z "$bin" ]]; then
+    for p in /usr/local/bin/sing-box /usr/bin/sing-box; do
+      [[ -x "$p" ]] && bin="$p" && break
+    done
+  fi
+  if [[ -z "$bin" ]]; then
+    error "找不到 sing-box 可执行文件，请确认已安装。"
+    exit 1
+  fi
+
+  # 语法校验
+  if ! "$bin" check -c "$cfg"; then
+    error "配置文件语法错误：$cfg"
+    cat "$cfg"
+    exit 1
+  fi
+  log "配置文件语法检查通过"
+}
+fi
+# --- end shim ---
 
 # 创建systemd服务
 create_systemd_service() {
