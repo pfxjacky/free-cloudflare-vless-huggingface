@@ -11,4 +11,11 @@ bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vle
 一键启动脚本(beta)
 ```bash
 bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/feelfree-vless-huggingface.sh)
+
+
+
+anytls reality 一键启动脚本（ALPHA）
+
+```bash
+wget https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/anyreality_script.sh && chmod +x anyreality_script.sh && ./anyreality_script.sh
 ```
