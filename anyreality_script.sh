@@ -3,6 +3,7 @@
 # sing-box AnyReality (AnyTLS + Reality) 自动安装配置脚本
 # 修复了 sing-box 1.12.0+ 版本兼容性问题
 # 新增 IPv6 支持和改进的二维码显示
+# 修复了IPv6客户端配置问题
 
 set -e
 
@@ -165,7 +166,7 @@ install_dependencies() {
     
     if [[ $SYSTEM == "debian" ]]; then
         apt update
-        # 添加IPv6相关工具
+        # 添加 IPv6相关工具
         apt install -y curl wget unzip jq openssl qrencode iproute2 iputils-ping net-tools
     else
         yum update -y
@@ -780,7 +781,7 @@ generate_qrcode() {
     fi
     
     # 生成终端显示的二维码（使用ANSI256格式，在SSH终端中显示效果更好）
-    echo -e "${CYAN}二维码 (扫描导入):${NC}"
+    echo -e "${CYAN}二维码 (扫码导入):${NC}"
     echo "================================================"
     
     # 使用UTF8格式在终端中显示，兼容性更好
@@ -824,13 +825,14 @@ generate_share_links() {
             secondary_info=""
             ;;
         "ipv6")
-            primary_ip="[$SERVER_IP]"  # IPv6需要方括号
+            # IPv6地址不需要方括号包围（这是关键修复点）
+            primary_ip="$SERVER_IP"
             secondary_info=""
             ;;
         "dual")
             primary_ip="$SERVER_IP"
             if [[ -n "$SERVER_IPV6" ]]; then
-                secondary_info=" | IPv6: [$SERVER_IPV6]"
+                secondary_info=" | IPv6: $SERVER_IPV6"
             fi
             ;;
     esac
@@ -839,9 +841,11 @@ generate_share_links() {
     # 格式: anytls://username:password@server:port?sni=domain&pbk=public_key&sid=short_id&fp=fingerprint#remarks
     ANYTLS_LINK="anytls://${USERNAME}:${PASSWORD}@${primary_ip}:${LISTEN_PORT}?sni=${SNI}&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&fp=chrome#AnyReality-${NETWORK_MODE}-${SHORT_ID}"
     
-    # IPv6专用链接
+    # IPv6专用链接（修复：IPv6地址在URL中需要方括号）
     if [[ "$NETWORK_MODE" == "dual" && -n "$SERVER_IPV6" ]]; then
         ANYTLS_LINK_IPV6="anytls://${USERNAME}:${PASSWORD}@[${SERVER_IPV6}]:${LISTEN_PORT}?sni=${SNI}&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&fp=chrome#AnyReality-IPv6-${SHORT_ID}"
+    elif [[ "$NETWORK_MODE" == "ipv6" ]]; then
+        ANYTLS_LINK="anytls://${USERNAME}:${PASSWORD}@[${SERVER_IP}]:${LISTEN_PORT}?sni=${SNI}&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&fp=chrome#AnyReality-IPv6-${SHORT_ID}"
     fi
     
     # 生成 NekoBox 可导入的链接
@@ -850,7 +854,7 @@ generate_share_links() {
     log "分享链接已生成"
 }
 
-# 生成客户端配置
+# 生成客户端配置（修复IPv6配置问题）
 generate_client_config() {
     log "生成客户端配置..."
     
@@ -899,7 +903,7 @@ $ANYTLS_LINK
 
 EOF
 
-    # 如果是双栈模式，添加IPv6链接
+    # 如果是双栈模式，添加 IPv6链接
     if [[ "$NETWORK_MODE" == "dual" && -n "$ANYTLS_LINK_IPV6" ]]; then
         cat >> /root/anyreality_client_config.txt << EOF
 IPv6专用链接:
@@ -914,7 +918,7 @@ $NEKOBOX_LINK
 
 注意: 由于 AnyTLS 是较新的协议，部分客户端可能需要手动配置
 
-=== NekoBox 客户端配置 (JSON格式) ===
+=== NekoBox 客户端配置 (JSON格式) - IPv4 ===
 {
     "dns": {
         "servers": [
@@ -950,14 +954,9 @@ $NEKOBOX_LINK
             "server": "$SERVER_IP",
             "server_port": $LISTEN_PORT,
             "password": "$PASSWORD",
-            "idle_session_check_interval": "30s",
-            "idle_session_timeout": "30s",
-            "min_idle_session": 5,
             "tls": {
                 "enabled": true,
-                "disable_sni": false,
                 "server_name": "$SNI",
-                "insecure": false,
                 "utls": {
                     "enabled": true,
                     "fingerprint": "chrome"
@@ -993,6 +992,37 @@ $NEKOBOX_LINK
     }
 }
 
+EOF
+
+    # IPv6客户端配置（如果需要）
+    if [[ "$NETWORK_MODE" == "ipv6" || "$NETWORK_MODE" == "dual" ]]; then
+        cat >> /root/anyreality_client_config.txt << EOF
+=== IPv6 客户端配置 (JSON格式) ===
+{
+    "type": "anytls",
+    "tag": "AnyReality-IPv6-$SHORT_ID",
+    "server": "$([[ "$NETWORK_MODE" == "dual" ]] && echo "$SERVER_IPV6" || echo "$SERVER_IP")",
+    "server_port": $LISTEN_PORT,
+    "password": "$PASSWORD",
+    "tls": {
+        "enabled": true,
+        "server_name": "$SNI",
+        "utls": {
+            "enabled": true,
+            "fingerprint": "chrome"
+        },
+        "reality": {
+            "enabled": true,
+            "public_key": "$PUBLIC_KEY",
+            "short_id": "$SHORT_ID"
+        }
+    }
+}
+
+EOF
+    fi
+
+    cat >> /root/anyreality_client_config.txt << EOF
 === sing-box Android (SFA) 配置 ===
 复制上面的 JSON 配置到 SFA 应用中
 
@@ -1040,14 +1070,26 @@ EOF
 - IPv4 Only: 仅使用IPv4，兼容性最佳
 - IPv6 Only: 仅使用IPv6，需要完整IPv6网络环境
 - Dual Stack: 同时支持IPv4和IPv6，自动选择最佳路径
+
+=== 重要提醒 ===
+关键修复说明：
+- IPv6地址在JSON配置中不需要方括号[]
+- 方括号仅在URL格式中使用（如分享链接）
+- 客户端JSON配置中直接使用纯IPv6地址格式
+- 这是导致IPv6连接失败的主要原因
 EOF
 
-    # 生成简化的 NekoBox 导入配置
+    # 生成简化的 NekoBox 导入配置（修复IPv6格式）
+    local client_server_ip="$SERVER_IP"
+    if [[ "$NETWORK_MODE" == "ipv6" ]]; then
+        client_server_ip="$SERVER_IP"  # IPv6地址不加方括号
+    fi
+
     cat > /root/nekobox_config.json << EOF
 {
     "type": "anytls",
     "tag": "AnyReality-$NETWORK_MODE-$SHORT_ID",
-    "server": "$SERVER_IP",
+    "server": "$client_server_ip",
     "server_port": $LISTEN_PORT,
     "password": "$PASSWORD",
     "tls": {
@@ -1066,7 +1108,7 @@ EOF
 }
 EOF
 
-    # 如果是双栈模式，生成IPv6配置
+    # 如果是双栈模式，生成IPv6配置（修复IPv6地址格式）
     if [[ "$NETWORK_MODE" == "dual" && -n "$SERVER_IPV6" ]]; then
         cat > /root/nekobox_config_ipv6.json << EOF
 {
@@ -1186,13 +1228,20 @@ display_config() {
     echo
     echo -e "${BLUE}导入说明:${NC}"
     echo "• 复制上面的链接到支持的客户端中导入"
-    echo "• 或扫描二维码进行导入"
+    echo "• 或扫码二维码进行导入"
     echo "• 如果客户端不支持 AnyTLS 协议，请使用手动配置"
     
     if [[ "$NETWORK_MODE" == "dual" ]]; then
         echo "• 双栈模式下，客户端会自动选择IPv4或IPv6"
         echo "• 如遇问题可尝试使用专门的IPv6链接"
     fi
+    
+    echo
+    echo -e "${RED}IPv6配置修复重点:${NC}"
+    echo "• JSON配置中IPv6地址不使用方括号 []"
+    echo "• 例如: \"server\": \"2001:db8::1\" (正确)"
+    echo "• 而不是: \"server\": \"[2001:db8::1]\" (错误)"
+    echo "• 方括号仅用于URL格式的分享链接中"
     
     echo
     echo -e "${BLUE}管理命令:${NC}"
@@ -1219,6 +1268,7 @@ display_config() {
     echo "• AnyTLS 是较新的协议，部分客户端可能需要更新或手动配置"
     echo "• 推荐使用最新版本的 NekoBox 或官方 sing-box 客户端"
     echo "• 如果链接导入失败，请使用手动配置 JSON 方式"
+    echo "• IPv6地址在JSON配置中不要加方括号，这是连接失败的主要原因"
     
     if [[ "$NETWORK_MODE" == "ipv6" || "$NETWORK_MODE" == "dual" ]]; then
         echo "• IPv6 模式需要完整的IPv6网络环境支持"
@@ -1358,7 +1408,7 @@ show_share_info() {
 main() {
     clear
     echo -e "${BLUE}sing-box AnyReality (AnyTLS + Reality) 自动安装脚本${NC}"
-    echo -e "${YELLOW}Enhanced版本 - 支持IPv6和改进二维码显示${NC}"
+    echo -e "${YELLOW}Enhanced版本 - 支持IPv6和改进二维码显示 - 修复IPv6客户端配置${NC}"
     echo "================================================"
     echo
     
