@@ -517,11 +517,7 @@ generate_singbox_config() {
     "outbounds": [
         {
             "type": "direct",
-            "tag": "direct",
-            "routing_mark": 0,
-            "bind_interface": "",
-            "inet4_bind_address": "",
-            "inet6_bind_address": ""
+            "tag": "direct"
         },
         {
             "type": "block",
@@ -615,11 +611,7 @@ EOF
     "outbounds": [
         {
             "type": "direct",
-            "tag": "direct",
-            "routing_mark": 0,
-            "bind_interface": "",
-            "inet4_bind_address": "",
-            "inet6_bind_address": ""
+            "tag": "direct"
         },
         {
             "type": "block",
