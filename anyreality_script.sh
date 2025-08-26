@@ -217,7 +217,7 @@ generate_config() {
     log "生成随机配置参数..."
     
     # 随机端口 (建议使用443或8443等常见HTTPS端口以提高隐蔽性)
-    HTTPS_PORTS=(443 8443 2053 2083 2087 2096)
+    HTTPS_PORTS=(443 8443 2053 2083 2087 2096 3306 5432 9929)
     LISTEN_PORT=${HTTPS_PORTS[$RANDOM % ${#HTTPS_PORTS[@]}]}
     
     # 生成随机用户名和密码
@@ -423,7 +423,7 @@ generate_singbox_config() {
     
     case $NETWORK_MODE in
         "ipv4")
-            listen_config='"listen": "0.0.0.0",'
+            listen_config='"listen": "::",'
             ;;
         "ipv6")
             listen_config='"listen": "::",'
@@ -438,44 +438,6 @@ generate_singbox_config() {
         "timestamp": true
     },
     "inbounds": [
-        {
-            "type": "anytls",
-            "tag": "anyreality-in-ipv4",
-            "listen": "0.0.0.0",
-            "listen_port": $LISTEN_PORT,
-            "users": [
-                {
-                    "name": "$USERNAME",
-                    "password": "$PASSWORD"
-                }
-            ],
-            "padding_scheme": [
-                "stop=8",
-                "0=30-30",
-                "1=100-400",
-                "2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000",
-                "3=9-9,500-1000",
-                "4=500-1000",
-                "5=500-1000",
-                "6=500-1000",
-                "7=500-1000"
-            ],
-            "tls": {
-                "enabled": true,
-                "server_name": "$SNI",
-                "reality": {
-                    "enabled": true,
-                    "handshake": {
-                        "server": "$DEST",
-                        "server_port": 443
-                    },
-                    "private_key": "$PRIVATE_KEY",
-                    "short_id": [
-                        "$SHORT_ID"
-                    ]
-                }
-            }
-        },
         {
             "type": "anytls",
             "tag": "anyreality-in-ipv6",
