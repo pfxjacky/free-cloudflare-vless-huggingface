@@ -16,20 +16,20 @@ bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vle
 ```
 
 
-一键启动脚本(beta)
+一键启动脚本(huggingface版本AWS IP)
 ```bash
 bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/feelfree-vless-huggingface.sh)
 
 ```
 
-anytls reality 一键启动脚本（ALPHA） 目前IPV6 慎用
+anytls reality 一键启动脚本（ALPHA） 目前IPV6 和 IPV4 双栈可用
 
 ```bash
 wget https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/anyreality_script.sh && chmod +x anyreality_script.sh && ./anyreality_script.sh
 
 ```
 
-
+下面的脚本无用，但是如果你无聊的时候可以用一下
 ```bash
 wget https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/anytls-fix.sh && chmod +x anytls-fix.sh && ./anytls-fix.sh
 
