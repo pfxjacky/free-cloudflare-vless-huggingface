@@ -896,19 +896,46 @@ $NEKOBOX_LINK
     ],
     "strategy": "prefer_ipv4"
   },
-  "inbounds": [
-    {
-      "type": "tun",
-      "tag": "tun-in",
-      "interface_name": "NekoBoxTUN",
-      "inet4_address": "172.19.0.1/30",
-      "inet6_address": "fdfe:dcba:9876::1/126",
-      "mtu": 1500, // 修改为通用值
-      "auto_route": true,
-      "strict_route": true,
-      "stack": "system" // 在 Android 上 'system' 通常可以工作，如果不行可尝试 'gvisor'
-    }
-  ],
+ "inbounds": [
+        {
+            "type": "anytls",
+            "tag": "anyreality-in-ipv6",
+            "listen": "::",
+            "listen_port": $LISTEN_PORT,
+            "users": [
+                {
+                    "name": "$USERNAME",
+                    "password": "$PASSWORD"
+                }
+            ],
+            "padding_scheme": [
+                "stop=8",
+                "0=30-30",
+                "1=100-400",
+                "2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000",
+                "3=9-9,500-1000",
+                "4=500-1000",
+                "5=500-1000",
+                "6=500-1000",
+                "7=500-1000"
+            ],
+            "tls": {
+                "enabled": true,
+                "server_name": "$SNI",
+                "reality": {
+                    "enabled": true,
+                    "handshake": {
+                        "server": "$DEST",
+                        "server_port": 443
+                    },
+                    "private_key": "$PRIVATE_KEY",
+                    "short_id": [
+                        "$SHORT_ID"
+                    ]
+                }
+            }
+        }
+    ],
     "outbounds": [
         {
             "type": "anytls",
