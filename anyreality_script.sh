@@ -880,35 +880,35 @@ $NEKOBOX_LINK
 
 注意: 由于 AnyTLS 是较新的协议，部分客户端可能需要手动配置
 
-=== NekoBox 客户端配置 (JSON格式) - IPv4 ===
+=== NekoBox 客户端配置 (JSON格式) - IPv4 & IPv6 ===
 {
-    "dns": {
-        "servers": [
-            {
-                "tag": "google",
-                "type": "tls",
-                "server": "8.8.8.8"
-            },
-            {
-                "tag": "local",
-                "type": "udp",
-                "server": "223.5.5.5"
-            }
-        ],
-        "strategy": "prefer_ipv4"
-    },
-    "inbounds": [
-        {
-            "type": "tun",
-            "tag": "tun-in",
-            "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
-            "mtu": 9000,
-            "auto_route": true,
-            "strict_route": true,
-            "endpoint_independent_nat": false,
-            "stack": "system"
-        }
+  "dns": {
+    "servers": [
+      {
+        "tag": "google-dot",
+        "address": "https://dns.google/dns-query", // 使用 DoH 更通用，或使用 tls://dns.google
+        "detour": "anyreality-out" // 让 DNS 查询也走代理，防止 DNS 污染
+      },
+      {
+        "tag": "local-udp",
+        "address": "223.5.5.5" // 国内备用 DNS
+      }
     ],
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "NekoBoxTUN",
+      "inet4_address": "172.19.0.1/30",
+      "inet6_address": "fdfe:dcba:9876::1/126",
+      "mtu": 1500, // 修改为通用值
+      "auto_route": true,
+      "strict_route": true,
+      "stack": "system" // 在 Android 上 'system' 通常可以工作，如果不行可尝试 'gvisor'
+    }
+  ],
     "outbounds": [
         {
             "type": "anytls",
@@ -935,23 +935,27 @@ $NEKOBOX_LINK
             "tag": "direct"
         }
     ],
-    "route": {
-        "rules": [
-            {
-                "action": "sniff"
-            },
-            {
-                "protocol": "dns",
-                "action": "hijack-dns"
-            },
-            {
-                "ip_is_private": true,
-                "outbound": "direct"
-            }
-        ],
-        "default_domain_resolver": "local",
-        "auto_detect_interface": true
-    }
+ "route": {
+    "rules": [
+      {
+        "protocol": "dns",
+        "outbound": "dns-out" // 所有DNS请求都由DNS引擎处理
+      },
+      {
+        "ip_is_private": true, // 私有/局域网地址直连
+        "outbound": "direct"
+      },
+      {
+        "domain": ["geosite:cn"], // 举例：国内网站直连 (需要 geosite.db 文件)
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": ["geoip:cn"], // 举例：国内 IP 直连 (需要 geoip.db 文件)
+        "outbound": "direct"
+      }
+    ],
+    "final": "anyreality-out" // 默认规则：所有其他流量都走代理
+  }
 }
 
 EOF
