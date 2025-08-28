@@ -3,7 +3,7 @@
 
 
 ------------------------------------------------1024----------------------------------------------------
-···bash
+```bash
 
 bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/1024_day_script.sh)
 
