@@ -3,7 +3,7 @@
 
 -----------------------------------------V2rayN 支持的anytls reality 协议-------------------支持IPV4&IPV6
 ```bash
-bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/V2rayN-Anytls_reality.sh）
+bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/V2rayN-Anytls_reality.sh)
 ```
 
 ------------------------------------------------1024----------------------------------------------------
