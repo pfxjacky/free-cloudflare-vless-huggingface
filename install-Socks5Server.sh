@@ -1,6 +1,6 @@
 #!/bin/bash
 # SOCKS5 Proxy Server Installation Script
-# Fixed version with IPv6 support
+# Complete version with enhanced IPv6 support and full uninstall
 
 set -e
 
@@ -203,13 +203,13 @@ install_dependencies() {
     
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update -y
-        apt-get install -y python3 python3-pip curl net-tools openssl ufw iproute2
+        apt-get install -y python3 python3-pip curl net-tools openssl ufw iproute2 netcat-openbsd
     elif command -v yum >/dev/null 2>&1; then
         yum update -y
-        yum install -y python3 python3-pip curl net-tools openssl firewalld iproute
+        yum install -y python3 python3-pip curl net-tools openssl firewalld iproute nc
     elif command -v dnf >/dev/null 2>&1; then
         dnf update -y
-        dnf install -y python3 python3-pip curl net-tools openssl firewalld iproute
+        dnf install -y python3 python3-pip curl net-tools openssl firewalld iproute nc
     else
         error "Unsupported package manager!"
         exit 1
@@ -716,34 +716,84 @@ EOF
     systemctl enable "$SERVICE_NAME"
 }
 
-# Start and test service
+# Improved start and test service function
 start_and_test_service() {
     log "Starting SOCKS5 proxy service..."
     
     systemctl start "$SERVICE_NAME"
     
+    # Wait for service to start properly
     sleep 5
     
     if systemctl is-active --quiet "$SERVICE_NAME"; then
         log "SOCKS5 proxy service started successfully"
         
-        # Check both IPv4 and IPv6 listening
-        ipv4_listening=$(ss -tuln 2>/dev/null | grep -E "0\.0\.0\.0:$SOCKS5_PORT|127\.0\.0\.1:$SOCKS5_PORT" || echo "")
-        ipv6_listening=$(ss -tuln 2>/dev/null | grep -E "\[::\]:$SOCKS5_PORT|\[::1\]:$SOCKS5_PORT" || echo "")
+        # Multiple methods to verify the service is working
+        local port_listening=false
+        local connection_test=false
         
-        if [[ -n "$ipv4_listening" ]] || [[ -n "$ipv6_listening" ]]; then
-            log "Port $SOCKS5_PORT is listening"
-            [[ -n "$ipv4_listening" ]] && log "IPv4 listening: ✓"
-            [[ -n "$ipv6_listening" ]] && log "IPv6 listening: ✓"
+        # Method 1: Check with ss
+        if ss -tuln 2>/dev/null | grep -q ":$SOCKS5_PORT "; then
+            port_listening=true
+            info "✓ Port $SOCKS5_PORT detected with ss command"
+        fi
+        
+        # Method 2: Check with netstat if ss failed
+        if [[ "$port_listening" == false ]] && netstat -tuln 2>/dev/null | grep -q ":$SOCKS5_PORT "; then
+            port_listening=true
+            info "✓ Port $SOCKS5_PORT detected with netstat command"
+        fi
+        
+        # Method 3: Direct connection test
+        if command -v nc >/dev/null 2>&1; then
+            if timeout 5 nc -z localhost "$SOCKS5_PORT" 2>/dev/null; then
+                connection_test=true
+                info "✓ Port $SOCKS5_PORT connection test successful"
+            elif timeout 5 nc -z 127.0.0.1 "$SOCKS5_PORT" 2>/dev/null; then
+                connection_test=true
+                info "✓ Port $SOCKS5_PORT IPv4 connection test successful"
+            elif timeout 5 nc -z ::1 "$SOCKS5_PORT" 2>/dev/null; then
+                connection_test=true
+                info "✓ Port $SOCKS5_PORT IPv6 connection test successful"
+            fi
+        fi
+        
+        # If either method succeeds, consider it working
+        if [[ "$port_listening" == true ]] || [[ "$connection_test" == true ]]; then
+            log "SOCKS5 proxy service is working correctly"
+            
+            # Show current listening status for information
+            info "Current listening ports for SOCKS5:"
+            ss -tuln 2>/dev/null | grep ":$SOCKS5_PORT " || netstat -tuln 2>/dev/null | grep ":$SOCKS5_PORT " || echo "  Port detection methods may vary"
+            
             return 0
         else
-            error "Port $SOCKS5_PORT is not listening properly"
+            warning "Port verification failed, but service is running. Checking service logs..."
+            
+            echo ""
+            echo "=== Service Status ==="
+            systemctl status "$SERVICE_NAME" --no-pager -l
+            echo ""
+            echo "=== Recent Service Logs ==="
+            journalctl -u "$SERVICE_NAME" --no-pager -n 20
+            echo ""
+            
+            # Try manual functional test if no auth
+            if [[ $SOCKS5_AUTH_ENABLED -eq 0 ]]; then
+                info "Attempting functional test without authentication..."
+                if timeout 10 curl --socks5 127.0.0.1:$SOCKS5_PORT http://httpbin.org/ip 2>/dev/null | grep -q "origin"; then
+                    log "✓ SOCKS5 functional test passed - service is working!"
+                    return 0
+                fi
+            fi
+            
+            error "Could not verify SOCKS5 service functionality"
             return 1
         fi
     else
         error "SOCKS5 proxy service failed to start"
         echo "Service status:"
-        systemctl status "$SERVICE_NAME" --no-pager
+        systemctl status "$SERVICE_NAME" --no-pager -l
         echo ""
         echo "Service logs:"
         journalctl -u "$SERVICE_NAME" --no-pager -n 20
@@ -847,20 +897,115 @@ EOF
     info "Configuration saved to: $INSTALL_DIR/client_config.txt"
 }
 
-# Uninstall function
-uninstall_socks5() {
-    echo "Uninstalling SOCKS5 proxy..."
+# Complete uninstall function
+complete_uninstall() {
+    echo "========================================"
+    echo "SOCKS5 Proxy Complete Uninstall"
+    echo "========================================"
+    echo ""
     
-    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+    warning "This will completely remove SOCKS5 proxy and all related files!"
+    read -p "Are you sure you want to proceed? (y/N): " confirm
     
-    rm -f "/etc/systemd/system/$SERVICE_NAME.service"
-    systemctl daemon-reload
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        info "Uninstall cancelled"
+        exit 0
+    fi
     
-    rm -rf "$INSTALL_DIR"
-    rm -f "/usr/local/bin/socks5-proxy"
+    log "Starting complete uninstall..."
     
-    log "SOCKS5 proxy uninstalled successfully"
+    # Stop and disable service
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        log "Stopping SOCKS5 service..."
+        systemctl stop "$SERVICE_NAME"
+    fi
+    
+    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        log "Disabling SOCKS5 service..."
+        systemctl disable "$SERVICE_NAME"
+    fi
+    
+    # Remove service file
+    if [[ -f "/etc/systemd/system/$SERVICE_NAME.service" ]]; then
+        log "Removing systemd service file..."
+        rm -f "/etc/systemd/system/$SERVICE_NAME.service"
+        systemctl daemon-reload
+    fi
+    
+    # Remove installation directory
+    if [[ -d "$INSTALL_DIR" ]]; then
+        log "Removing installation directory..."
+        rm -rf "$INSTALL_DIR"
+    fi
+    
+    # Remove wrapper script
+    if [[ -f "/usr/local/bin/socks5-proxy" ]]; then
+        log "Removing wrapper script..."
+        rm -f "/usr/local/bin/socks5-proxy"
+    fi
+    
+    # Remove firewall rules (attempt to clean up)
+    if command -v ufw >/dev/null 2>&1; then
+        log "Attempting to remove firewall rules..."
+        # Get port from service file if it still exists, or try to find it
+        if [[ -f "$INSTALL_DIR/client_config.txt" ]]; then
+            local port=$(grep "Port:" "$INSTALL_DIR/client_config.txt" 2>/dev/null | awk '{print $2}')
+            if [[ -n "$port" ]]; then
+                ufw delete allow "$port"/tcp 2>/dev/null || true
+                log "Removed UFW rule for port $port"
+            fi
+        fi
+    elif command -v firewall-cmd >/dev/null 2>&1; then
+        if systemctl is-active --quiet firewalld; then
+            log "Note: Please manually remove firewall rules if needed"
+            info "Use: firewall-cmd --permanent --remove-port=PORT/tcp && firewall-cmd --reload"
+        fi
+    fi
+    
+    # Clean up any remaining processes
+    local remaining_processes=$(pgrep -f "socks5_server.py" 2>/dev/null || echo "")
+    if [[ -n "$remaining_processes" ]]; then
+        log "Terminating remaining SOCKS5 processes..."
+        pkill -f "socks5_server.py" 2>/dev/null || true
+        sleep 2
+        pkill -9 -f "socks5_server.py" 2>/dev/null || true
+    fi
+    
+    # Remove any leftover configuration files
+    for config_dir in "/etc/socks5" "/opt/socks5" "/var/lib/socks5"; do
+        if [[ -d "$config_dir" ]]; then
+            log "Removing configuration directory: $config_dir"
+            rm -rf "$config_dir"
+        fi
+    done
+    
+    # Clean up logs
+    if [[ -d "/var/log/socks5" ]]; then
+        log "Removing log directory..."
+        rm -rf "/var/log/socks5"
+    fi
+    
+    # Remove any cron jobs (if any were created)
+    if crontab -l 2>/dev/null | grep -q "socks5"; then
+        log "Found SOCKS5 related cron jobs, please remove manually:"
+        crontab -l | grep "socks5"
+    fi
+    
+    log "Complete uninstall finished successfully!"
+    echo ""
+    echo "========================================"
+    echo "SOCKS5 Proxy has been completely removed"
+    echo "========================================"
+    echo ""
+    echo "Removed items:"
+    echo "  ✓ Systemd service"
+    echo "  ✓ Installation directory ($INSTALL_DIR)"
+    echo "  ✓ Wrapper script (/usr/local/bin/socks5-proxy)"
+    echo "  ✓ Service processes"
+    echo "  ✓ Configuration files"
+    echo ""
+    echo "Note: Firewall rules and system packages were left intact"
+    echo "      Remove them manually if no longer needed"
 }
 
 # Main installation function
@@ -871,8 +1016,8 @@ main() {
     echo "========================================"
     echo ""
     
-    if [[ "$1" == "uninstall" ]]; then
-        uninstall_socks5
+    if [[ "$1" == "uninstall" ]] || [[ "$1" == "remove" ]] || [[ "$1" == "clean" ]]; then
+        complete_uninstall
         exit 0
     fi
     
@@ -897,25 +1042,63 @@ main() {
         log "SOCKS5 proxy installation completed successfully with enhanced IPv6 support!"
     else
         error "SOCKS5 proxy installation failed!"
+        echo ""
+        echo "You can try these troubleshooting steps:"
+        echo "1. Check service logs: journalctl -u $SERVICE_NAME -f"
+        echo "2. Test manually: cd $INSTALL_DIR && python3 socks5_server.py --bind 0.0.0.0:$SOCKS5_PORT"
+        echo "3. Check firewall: ufw status"
+        echo "4. Restart service: systemctl restart $SERVICE_NAME"
         exit 1
     fi
 }
 
-# Script usage
-if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    echo "Usage: $0 [uninstall]"
+# Script usage and help
+show_help() {
+    echo "SOCKS5 Proxy Server Installation Script"
+    echo "========================================"
+    echo ""
+    echo "Usage: $0 [OPTION]"
     echo ""
     echo "Options:"
-    echo "  uninstall    Remove SOCKS5 proxy server"
-    echo "  --help, -h   Show this help message"
+    echo "  install          Install SOCKS5 proxy server (default)"
+    echo "  uninstall        Completely remove SOCKS5 proxy server"
+    echo "  remove           Same as uninstall"
+    echo "  clean            Same as uninstall"
+    echo "  --help, -h       Show this help message"
     echo ""
-    echo "This script installs a SOCKS5 proxy server with:"
-    echo "  - Enhanced IPv4/IPv6 dual-stack support"
-    echo "  - Smart connection routing"
-    echo "  - Username/password authentication"
-    echo "  - Automatic firewall configuration"
-    echo "  - Systemd service integration"
-    exit 0
-fi
+    echo "Features:"
+    echo "  ✓ Enhanced IPv4/IPv6 dual-stack support"
+    echo "  ✓ Smart connection routing and fallback"
+    echo "  ✓ Username/password authentication"
+    echo "  ✓ Automatic firewall configuration"
+    echo "  ✓ Systemd service integration"
+    echo "  ✓ Complete uninstall functionality"
+    echo "  ✓ Comprehensive error handling and logging"
+    echo ""
+    echo "Examples:"
+    echo "  $0                    # Install SOCKS5 proxy"
+    echo "  $0 install           # Install SOCKS5 proxy"
+    echo "  $0 uninstall         # Remove everything"
+    echo ""
+    echo "After installation, manage the service with:"
+    echo "  systemctl start/stop/restart/status socks5-proxy"
+    echo "  journalctl -u socks5-proxy -f"
+}
 
-main "$@"
+# Handle command line arguments
+case "${1:-install}" in
+    install|"")
+        main "$@"
+        ;;
+    uninstall|remove|clean)
+        main "$@"
+        ;;
+    --help|-h|help)
+        show_help
+        ;;
+    *)
+        echo "Unknown option: $1"
+        echo "Use '$0 --help' for usage information"
+        exit 1
+        ;;
+esac
