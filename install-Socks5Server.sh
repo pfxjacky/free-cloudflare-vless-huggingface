@@ -1,6 +1,6 @@
 #!/bin/bash
 # SOCKS5 Proxy Server Installation Script
-# Fixed version with improved error handling and security
+# Fixed version with IPv6 support
 
 set -e
 
@@ -214,16 +214,27 @@ install_dependencies() {
         error "Unsupported package manager!"
         exit 1
     fi
+    
+    # Enable IPv6 if available
+    if [[ -f /proc/sys/net/ipv6/conf/all/disable_ipv6 ]]; then
+        echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6
+        echo 0 > /proc/sys/net/ipv6/conf/default/disable_ipv6
+    fi
 }
 
-# Create improved Python SOCKS5 proxy
+# Create improved Python SOCKS5 proxy with IPv6 support
 create_python_socks5() {
-    log "Creating Python SOCKS5 proxy server..."
+    log "Creating Python SOCKS5 proxy server with IPv6 support..."
     
     mkdir -p "$INSTALL_DIR"
     
     cat > "$INSTALL_DIR/socks5_server.py" << 'EOF'
 #!/usr/bin/env python3
+"""
+Enhanced SOCKS5 Proxy Server with IPv6 Support
+Fixes IPv6 connectivity issues and improves dual-stack handling
+"""
+
 import socket
 import threading
 import struct
@@ -336,6 +347,65 @@ class SOCKS5Handler(BaseRequestHandler):
             logger.error(f"Authentication error with {self.client_address}: {e}")
             return False
 
+    def create_connection_smart(self, target_addr, target_port):
+        """Smart connection creation with IPv4/IPv6 fallback"""
+        try:
+            # Get all possible addresses
+            addr_info = socket.getaddrinfo(
+                target_addr, target_port, 
+                socket.AF_UNSPEC, socket.SOCK_STREAM
+            )
+            
+            # Determine client's IP version preference
+            client_is_ipv6 = ':' in str(self.client_address[0])
+            
+            # Sort addresses: prefer same IP version as client, then IPv4
+            def sort_key(info):
+                family = info[0]
+                if client_is_ipv6:
+                    return (0 if family == socket.AF_INET6 else 1, family)
+                else:
+                    return (0 if family == socket.AF_INET else 1, family)
+            
+            addr_info.sort(key=sort_key)
+            
+            last_error = None
+            for family, socktype, proto, canonname, sockaddr in addr_info:
+                try:
+                    target_socket = socket.socket(family, socktype)
+                    target_socket.settimeout(10)
+                    
+                    # For IPv6, handle scope ID properly
+                    if family == socket.AF_INET6 and len(sockaddr) > 2:
+                        # Ensure proper IPv6 address handling
+                        if sockaddr[3] == 0:  # No scope ID set
+                            sockaddr = (sockaddr[0], sockaddr[1], sockaddr[2], 0)
+                    
+                    target_socket.connect(sockaddr)
+                    
+                    family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                    logger.info(f"Connected via {family_name} to {sockaddr}")
+                    return target_socket
+                    
+                except Exception as e:
+                    last_error = e
+                    family_name = "IPv6" if family == socket.AF_INET6 else "IPv4"
+                    logger.debug(f"Failed to connect via {family_name} to {sockaddr}: {e}")
+                    try:
+                        target_socket.close()
+                    except:
+                        pass
+                    continue
+            
+            if last_error:
+                raise last_error
+            else:
+                raise Exception("No address info available")
+                
+        except Exception as e:
+            logger.warning(f"Failed to create connection to {target_addr}:{target_port}: {e}")
+            raise
+
     def handle_connection_request(self):
         try:
             data = self.request.recv(1024)
@@ -345,16 +415,14 @@ class SOCKS5Handler(BaseRequestHandler):
 
             atyp = data[3]
             
-            if atyp == 1:
+            if atyp == 1:  # IPv4
                 if len(data) < 10:
                     self.send_error_response(1)
                     return False
                 target_ip = socket.inet_ntoa(data[4:8])
                 target_port = struct.unpack('!H', data[8:10])[0]
-                target_addr = (target_ip, target_port)
-                family = socket.AF_INET
                 
-            elif atyp == 3:
+            elif atyp == 3:  # Domain name
                 if len(data) < 5:
                     self.send_error_response(1)
                     return False
@@ -364,40 +432,32 @@ class SOCKS5Handler(BaseRequestHandler):
                     return False
                 target_ip = data[5:5+domain_len].decode('utf-8')
                 target_port = struct.unpack('!H', data[5+domain_len:7+domain_len])[0]
-                target_addr = (target_ip, target_port)
-                family = socket.AF_INET
                 
-            elif atyp == 4:
+            elif atyp == 4:  # IPv6
                 if len(data) < 22:
                     self.send_error_response(1)
                     return False
                 target_ip = socket.inet_ntop(socket.AF_INET6, data[4:20])
                 target_port = struct.unpack('!H', data[20:22])[0]
-                target_addr = (target_ip, target_port)
-                family = socket.AF_INET6
                 
             else:
-                self.send_error_response(8)
+                self.send_error_response(8)  # Address type not supported
                 return False
 
             try:
-                if atyp == 3:
-                    target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    target_socket.settimeout(10)
-                    target_socket.connect(target_addr)
-                else:
-                    target_socket = socket.socket(family, socket.SOCK_STREAM)
-                    target_socket.settimeout(10)
-                    target_socket.connect(target_addr)
+                # Use smart connection creation
+                target_socket = self.create_connection_smart(target_ip, target_port)
 
+                # Send success response
                 self.request.send(b'\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00')
-                logger.info(f"Connected {self.client_address} -> {target_addr}")
+                logger.info(f"Proxying {self.client_address} -> {target_ip}:{target_port}")
 
+                # Start data forwarding
                 self.forward_data(target_socket)
                 
             except Exception as e:
-                logger.warning(f"Failed to connect to {target_addr}: {e}")
-                self.send_error_response(5)
+                logger.warning(f"Failed to connect to {target_ip}:{target_port}: {e}")
+                self.send_error_response(5)  # Connection refused
                 return False
 
         except Exception as e:
@@ -412,15 +472,15 @@ class SOCKS5Handler(BaseRequestHandler):
             pass
 
     def forward_data(self, target_socket):
-        def forward(src, dst):
+        def forward(src, dst, direction):
             try:
                 while True:
                     data = src.recv(4096)
                     if not data:
                         break
                     dst.send(data)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Forward {direction} stopped: {e}")
             finally:
                 try:
                     src.close()
@@ -428,8 +488,8 @@ class SOCKS5Handler(BaseRequestHandler):
                 except:
                     pass
 
-        thread1 = threading.Thread(target=forward, args=(self.request, target_socket))
-        thread2 = threading.Thread(target=forward, args=(target_socket, self.request))
+        thread1 = threading.Thread(target=forward, args=(self.request, target_socket, "client->target"))
+        thread2 = threading.Thread(target=forward, args=(target_socket, self.request, "target->client"))
         
         thread1.daemon = True
         thread2.daemon = True
@@ -440,46 +500,128 @@ class SOCKS5Handler(BaseRequestHandler):
         thread1.join()
         thread2.join()
 
-class SOCKS5Server(ThreadingTCPServer):
-    allow_reuse_address = True
+class DualStackTCPServer(ThreadingTCPServer):
+    """Enhanced TCP Server with proper IPv4/IPv6 dual-stack support"""
     
-    def __init__(self, server_address, handler_class, username=None, password=None):
+    def __init__(self, server_address, RequestHandlerClass, bind_and_activate=True, username=None, password=None):
         self.username = username
         self.password = password
-        super().__init__(server_address, handler_class)
+        self.allow_reuse_address = True
+        
+        # Determine address family and setup
+        host, port = server_address
+        
+        if host == '0.0.0.0' or host == '::':
+            # Try to bind to both IPv4 and IPv6
+            self.address_family = socket.AF_INET6
+            if socket.has_ipv6:
+                server_address = ('::', port)
+                logger.info("Attempting dual-stack IPv4/IPv6 binding")
+            else:
+                self.address_family = socket.AF_INET
+                server_address = ('0.0.0.0', port)
+                logger.info("IPv6 not available, using IPv4 only")
+        elif ':' in host and not host.startswith('['):
+            # IPv6 address
+            self.address_family = socket.AF_INET6
+            logger.info(f"Binding to IPv6 address: {host}")
+        else:
+            # IPv4 address
+            self.address_family = socket.AF_INET
+            logger.info(f"Binding to IPv4 address: {host}")
+            
+        super().__init__(server_address, RequestHandlerClass, bind_and_activate)
+
+    def server_bind(self):
+        if self.address_family == socket.AF_INET6:
+            try:
+                # Enable dual stack (accept IPv4 connections on IPv6 socket)
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                logger.info("Dual stack (IPv4/IPv6) binding enabled")
+            except (AttributeError, socket.error) as e:
+                logger.warning(f"Could not enable dual stack: {e}")
+                
+        super().server_bind()
+        
+        # Log the actual binding address
+        actual_addr = self.socket.getsockname()
+        if self.address_family == socket.AF_INET6:
+            logger.info(f"Server bound to [{actual_addr[0]}]:{actual_addr[1]}")
+        else:
+            logger.info(f"Server bound to {actual_addr[0]}:{actual_addr[1]}")
 
 def signal_handler(signum, frame):
     logger.info("Shutting down SOCKS5 proxy server...")
     sys.exit(0)
 
 def main():
-    parser = argparse.ArgumentParser(description='SOCKS5 Proxy Server')
-    parser.add_argument('--bind', default='0.0.0.0:1080', help='Bind address')
+    parser = argparse.ArgumentParser(description='SOCKS5 Proxy Server with enhanced IPv4/IPv6 support')
+    parser.add_argument('--bind', default='0.0.0.0:1080', help='Bind address (default: 0.0.0.0:1080 for dual-stack)')
     parser.add_argument('--username', help='Username for authentication')
     parser.add_argument('--password', help='Password for authentication')
+    parser.add_argument('--ipv6-only', action='store_true', help='Bind to IPv6 only')
+    parser.add_argument('--ipv4-only', action='store_true', help='Bind to IPv4 only')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     
     args = parser.parse_args()
     
-    if ':' in args.bind:
-        host, port = args.bind.rsplit(':', 1)
-        port = int(port)
-    else:
-        host = '0.0.0.0'
-        port = int(args.bind)
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
     
+    # Parse bind address
+    if ':' in args.bind and not args.bind.startswith('['):
+        if args.bind.count(':') == 1:  # IPv4 host:port
+            host, port = args.bind.rsplit(':', 1)
+        else:  # IPv6 address
+            if args.bind.rfind(':') > args.bind.rfind(']') if ']' in args.bind else True:
+                host, port = args.bind.rsplit(':', 1)
+            else:
+                host = args.bind
+                port = '1080'
+    elif args.bind.startswith('[') and ']:' in args.bind:
+        # IPv6 [host]:port format
+        bracket_end = args.bind.rfind(']:')
+        host = args.bind[1:bracket_end]
+        port = args.bind[bracket_end+2:]
+    else:
+        if args.bind.isdigit():
+            host = '0.0.0.0'
+            port = args.bind
+        else:
+            host = args.bind
+            port = '1080'
+    
+    port = int(port)
+    
+    # Override host based on command line options
+    if args.ipv6_only:
+        host = '::' if host == '0.0.0.0' else host
+    elif args.ipv4_only:
+        host = '0.0.0.0' if host == '::' else host
+    
+    # Setup signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        server = SOCKS5Server((host, port), SOCKS5Handler, args.username, args.password)
+        server = DualStackTCPServer((host, port), SOCKS5Handler, username=args.username, password=args.password)
         
         auth_status = "with authentication" if args.username and args.password else "without authentication"
-        logger.info(f"SOCKS5 proxy server listening on {host}:{port} ({auth_status})")
         
+        if server.address_family == socket.AF_INET6 and not args.ipv6_only:
+            family_info = "IPv4/IPv6 dual-stack"
+        elif server.address_family == socket.AF_INET6:
+            family_info = "IPv6"
+        else:
+            family_info = "IPv4"
+        
+        logger.info(f"SOCKS5 proxy server ready ({family_info}, {auth_status})")
         server.serve_forever()
         
     except Exception as e:
         logger.error(f"Failed to start server: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == '__main__':
@@ -495,33 +637,47 @@ exec python3 socks5_server.py "\$@"
 EOF
     
     chmod +x "/usr/local/bin/socks5-proxy"
-    log "Python SOCKS5 proxy created successfully"
+    log "Enhanced Python SOCKS5 proxy with IPv6 support created successfully"
 }
 
-# Configure firewall
+# Configure firewall for IPv6
 configure_firewall() {
-    log "Configuring firewall for port $SOCKS5_PORT..."
+    log "Configuring firewall for port $SOCKS5_PORT (IPv4 and IPv6)..."
     
     if command -v ufw >/dev/null 2>&1; then
+        # Ubuntu/Debian with UFW
         ufw allow "$SOCKS5_PORT"/tcp
-        if ! ufw status | grep -q "Status: active"; then
-            warning "UFW is not active. Activating now..."
-            echo "y" | ufw enable
+        # Explicitly allow IPv6
+        ufw --force enable
+        if ufw status | grep -q "Status: active"; then
+            log "UFW firewall configured for IPv4/IPv6"
         fi
     elif command -v firewall-cmd >/dev/null 2>&1; then
+        # CentOS/RHEL with firewalld
         if systemctl is-active --quiet firewalld; then
             firewall-cmd --permanent --add-port="$SOCKS5_PORT"/tcp
             firewall-cmd --reload
+            log "Firewalld configured for IPv4/IPv6"
         else
             warning "firewalld is not active"
         fi
     elif command -v iptables >/dev/null 2>&1; then
+        # Fallback to iptables
         iptables -I INPUT -p tcp --dport "$SOCKS5_PORT" -j ACCEPT
+        # Add IPv6 rule if ip6tables exists
+        if command -v ip6tables >/dev/null 2>&1; then
+            ip6tables -I INPUT -p tcp --dport "$SOCKS5_PORT" -j ACCEPT
+            log "iptables/ip6tables rules added"
+        fi
+        # Try to save rules
         if command -v iptables-save >/dev/null 2>&1; then
             iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
         fi
+        if command -v ip6tables-save >/dev/null 2>&1; then
+            ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+        fi
     else
-        warning "No firewall management tool found. Please manually open port $SOCKS5_PORT"
+        warning "No firewall management tool found. Please manually open port $SOCKS5_PORT for both IPv4 and IPv6"
     fi
 }
 
@@ -536,7 +692,7 @@ create_systemd_service() {
     
     cat > "/etc/systemd/system/$SERVICE_NAME.service" << EOF
 [Unit]
-Description=SOCKS5 Proxy Server
+Description=SOCKS5 Proxy Server with IPv4/IPv6 Support
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -566,16 +722,22 @@ start_and_test_service() {
     
     systemctl start "$SERVICE_NAME"
     
-    sleep 3
+    sleep 5
     
     if systemctl is-active --quiet "$SERVICE_NAME"; then
         log "SOCKS5 proxy service started successfully"
         
-        if ss -tuln 2>/dev/null | grep -q ":$SOCKS5_PORT " || netstat -tuln 2>/dev/null | grep -q ":$SOCKS5_PORT "; then
+        # Check both IPv4 and IPv6 listening
+        ipv4_listening=$(ss -tuln 2>/dev/null | grep -E "0\.0\.0\.0:$SOCKS5_PORT|127\.0\.0\.1:$SOCKS5_PORT" || echo "")
+        ipv6_listening=$(ss -tuln 2>/dev/null | grep -E "\[::\]:$SOCKS5_PORT|\[::1\]:$SOCKS5_PORT" || echo "")
+        
+        if [[ -n "$ipv4_listening" ]] || [[ -n "$ipv6_listening" ]]; then
             log "Port $SOCKS5_PORT is listening"
+            [[ -n "$ipv4_listening" ]] && log "IPv4 listening: ✓"
+            [[ -n "$ipv6_listening" ]] && log "IPv6 listening: ✓"
             return 0
         else
-            error "Port $SOCKS5_PORT is not listening"
+            error "Port $SOCKS5_PORT is not listening properly"
             return 1
         fi
     else
@@ -616,6 +778,7 @@ show_client_config() {
     echo "  Server: $SERVER_IP"
     echo "  Port: $SOCKS5_PORT"
     echo "  Protocol: SOCKS5"
+    echo "  IPv6 Support: ✓ Enhanced"
     
     if [[ $SOCKS5_AUTH_ENABLED -eq 1 ]]; then
         echo "  Authentication: Username/Password"
@@ -623,12 +786,22 @@ show_client_config() {
         echo "  Password: $SOCKS5_PASSWORD"
         echo ""
         echo "Client Test Commands:"
-        echo "  curl --socks5-hostname $SOCKS5_USERNAME:$SOCKS5_PASSWORD@$SERVER_IP:$SOCKS5_PORT https://httpbin.org/ip"
+        if [[ "$SERVER_IP" =~ : ]]; then
+            echo "  IPv6: curl --socks5-hostname $SOCKS5_USERNAME:$SOCKS5_PASSWORD@[$SERVER_IP]:$SOCKS5_PORT https://httpbin.org/ip"
+        else
+            echo "  IPv4: curl --socks5-hostname $SOCKS5_USERNAME:$SOCKS5_PASSWORD@$SERVER_IP:$SOCKS5_PORT https://httpbin.org/ip"
+        fi
+        echo "  Test IPv6: curl --socks5-hostname $SOCKS5_USERNAME:$SOCKS5_PASSWORD@$SERVER_IP:$SOCKS5_PORT -6 https://ipv6.icanhazip.com"
     else
         echo "  Authentication: None"
         echo ""
         echo "Client Test Commands:"
-        echo "  curl --socks5 $SERVER_IP:$SOCKS5_PORT https://httpbin.org/ip"
+        if [[ "$SERVER_IP" =~ : ]]; then
+            echo "  IPv6: curl --socks5 [$SERVER_IP]:$SOCKS5_PORT https://httpbin.org/ip"
+        else
+            echo "  IPv4: curl --socks5 $SERVER_IP:$SOCKS5_PORT https://httpbin.org/ip"
+        fi
+        echo "  Test IPv6: curl --socks5 $SERVER_IP:$SOCKS5_PORT -6 https://ipv6.icanhazip.com"
     fi
     
     echo ""
@@ -648,6 +821,7 @@ SOCKS5 Proxy Configuration
 Server: $SERVER_IP
 Port: $SOCKS5_PORT
 Protocol: SOCKS5
+IPv6 Support: Enhanced
 EOF
 
     if [[ $SOCKS5_AUTH_ENABLED -eq 1 ]]; then
@@ -658,6 +832,7 @@ Password: $SOCKS5_PASSWORD
 
 Test Commands:
 curl --socks5-hostname $SOCKS5_USERNAME:$SOCKS5_PASSWORD@$SERVER_IP:$SOCKS5_PORT https://httpbin.org/ip
+curl --socks5-hostname $SOCKS5_USERNAME:$SOCKS5_PASSWORD@$SERVER_IP:$SOCKS5_PORT -6 https://ipv6.icanhazip.com
 EOF
     else
         cat >> "$INSTALL_DIR/client_config.txt" << EOF
@@ -665,6 +840,7 @@ Authentication: None
 
 Test Commands:
 curl --socks5 $SERVER_IP:$SOCKS5_PORT https://httpbin.org/ip
+curl --socks5 $SERVER_IP:$SOCKS5_PORT -6 https://ipv6.icanhazip.com
 EOF
     fi
     
@@ -691,6 +867,7 @@ uninstall_socks5() {
 main() {
     echo "========================================"
     echo "SOCKS5 Proxy Server Installation Script"
+    echo "Enhanced IPv6 Support Version"
     echo "========================================"
     echo ""
     
@@ -717,7 +894,7 @@ main() {
     
     if start_and_test_service; then
         show_client_config
-        log "SOCKS5 proxy installation completed successfully!"
+        log "SOCKS5 proxy installation completed successfully with enhanced IPv6 support!"
     else
         error "SOCKS5 proxy installation failed!"
         exit 1
@@ -733,7 +910,8 @@ if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     echo "  --help, -h   Show this help message"
     echo ""
     echo "This script installs a SOCKS5 proxy server with:"
-    echo "  - IPv4/IPv6 support"
+    echo "  - Enhanced IPv4/IPv6 dual-stack support"
+    echo "  - Smart connection routing"
     echo "  - Username/password authentication"
     echo "  - Automatic firewall configuration"
     echo "  - Systemd service integration"
