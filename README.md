@@ -7,7 +7,7 @@ bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vle
 ```
 ------------------------------------------Install 独立SOCKS5代理服务器脚本--------------------------------
 ```bash
-wget https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/install-Socks5Server.sh && chmod +x install-Socks5Server.sh && ./install-Socks5Server.sh install
+wget https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/install-Socks5Server.sh && chmod +x install-Socks5Server.sh && ./install-Socks5Server.sh
 ```
 
 ------------------------------------------------1024----------------------------------------------------
