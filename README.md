@@ -4,7 +4,7 @@
 
 -----------------------------------------安装socks5 代理服务器---------------------------------支持IPV4&IPV6
 ```bash
-bash <(curl -l -s https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/install-socks5-1.sh)
+bash <(https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/install_socks5_proxy.sh)
 ```
 -----------------------------------------V2rayN 支持的anytls reality 协议-------------------支持IPV4&IPV6
 ```bash
