@@ -2,6 +2,11 @@
 在huggingface.co空间打通一个到cloudflare的隧道建立vless节点，并转发流量到落地鸡。
 
 
+-----------------------------------------安装anytls一键脚本---------------------------------支持IPV4&IPV6
+```bash
+bash <(https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/anyreality_script.sh)
+```
+
 -----------------------------------------安装socks5 代理服务器---------------------------------支持IPV4&IPV6
 ```bash
 bash <(https://raw.githubusercontent.com/pfxjacky/free-cloudflare-vless-huggingface/refs/heads/main/install_socks5_proxy.sh)
